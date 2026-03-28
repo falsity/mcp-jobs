@@ -4,12 +4,18 @@
   "description": "A job search and crawling tool built with Model Context Protocol",
   "main": "./dist/index.js",
   "bin": {
-    "mcp-jobs": "./dist/mcp.js"
+    "mcp-jobs": "./dist/mcp.js",
+    "mcp-jobs-server": "./dist/mcp-http.js",
+    "mcp-jobs-server-http": "./dist/mcp-http-simple.js"
   },
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
-    "dev": "ts-node src/index.ts"
+    "dev": "ts-node src/index.ts",
+    "server": "node dist/mcp-http.js",
+    "server:dev": "ts-node src/mcp-http.ts",
+    "server:http": "node dist/mcp-http-simple.js",
+    "server:http:dev": "ts-node src/mcp-http-simple.ts"
   },
   "keywords": ["jobs", "crawler", "search", "mcp", "model-context-protocol"],
   "author": "",
@@ -19,10 +25,16 @@
     "@types/cheerio": "^0.22.35",
     "@types/node": "^20.11.19",
     "cheerio": "^1.0.0-rc.12",
+    "cors": "^2.8.5",
     "dotenv": "^16.4.7",
+    "express": "^4.21.0",
     "playwright": "^1.41.2",
     "ts-node": "^10.9.2",
     "typescript": "^5.3.3"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^4.17.21"
   },
   "files": [
     "dist",

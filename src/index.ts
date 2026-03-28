@@ -4,6 +4,12 @@ import { crawlerConfigs } from './config/crawlerConfig';
 import { jobSearchUrls } from './config/urlConfig';
 import { CrawlerData } from './crawler/webCrawler';
 
+// Log with ISO timestamp (for all console output in search/crawl flow)
+function logWithTime(msg: string, ...args: unknown[]): void {
+  const ts = new Date().toISOString();
+  console.error(`[${ts}] ${msg}`, ...args);
+}
+
 // 定义搜索参数接口
 export interface SearchParams {
   keyword?: string;
@@ -25,7 +31,7 @@ async function crawlByUrl(url: string, params: SearchParams): Promise<CrawlerDat
   });
 
   if (!matchedConfig) {
-    console.error('No matching configuration found for URL:', url);
+    logWithTime('No matching configuration found for URL:', url);
     return null;
   }
 
@@ -37,10 +43,8 @@ async function crawlByUrl(url: string, params: SearchParams): Promise<CrawlerDat
       ...matchedConfig,
       url: matchedConfig.urlBuilder(url, params, matchedConfig?.config || {})
     };
-    console.log(customConfig);
     const result = await crawlerService.startCrawling(customConfig);
-    console.log(result);
-    
+
     // 获取爬取的数据
     const dataset = result || [];
     
@@ -59,11 +63,17 @@ async function crawlByUrl(url: string, params: SearchParams): Promise<CrawlerDat
   }
 }
 
-export async function searchJobList(params: SearchParams = {}) {
-  const { keyword, city, page = 1, salary, workYear } = params;
-  const result : any[] = [];
+export interface SearchJobResult {
+  jobs: any[];
+  bySite: { name: string; count: number }[];
+}
 
-  console.log(`开始搜索职位 - 关键词: ${keyword}, 城市: ${city || '全国'}`);
+export async function searchJobList(params: SearchParams = {}): Promise<SearchJobResult> {
+  const { keyword, city, page = 1, salary, workYear } = params;
+  const result: any[] = [];
+  const bySite: { name: string; count: number }[] = [];
+
+  logWithTime(`开始搜索职位 - 关键词: ${keyword}, 城市: ${city || '全国'}`);
 
   for (const config of jobSearchUrls) {
     try {
@@ -76,26 +86,32 @@ export async function searchJobList(params: SearchParams = {}) {
       });
       if (dataset) {
         const jobItems = dataset.filter(item => item.data?.jobInfo);
+        let added = 0;
         jobItems.forEach(item => {
-          result.push(...item.data.jobInfo)
+          const arr = (item.data.jobInfo || []).filter((j: unknown) => j != null);
+          added += arr.length;
+          result.push(...arr);
         });
-        console.log(`从 ${config.name} 获取到 ${result.length} 个职位`);
+        bySite.push({ name: config.name, count: added });
+        logWithTime(`[${config.name}] ${config.url} -> ${added} 个职位`);
+      } else {
+        bySite.push({ name: config.name, count: 0 });
+        logWithTime(`[${config.name}] ${config.url} -> 0 个职位（无匹配配置或抓取异常）`);
       }
     } catch (error) {
-      console.warn(`从 ${config.name} 获取职位失败:`, error instanceof Error ? error.message : String(error));
-      // Continue with other sources even if one fails
+      bySite.push({ name: config.name, count: 0 });
+      logWithTime(`[${config.name}] ${config.url} 获取失败:`, error instanceof Error ? error.message : String(error));
     }
   }
 
-  console.log(`搜索完成，总共找到 ${result.length} 个职位`);
-  console.log(result);
-  return result;
+  logWithTime(`搜索完成，共 ${result.length} 个职位，各站点: ${bySite.map(s => s.name + '=' + s.count).join(', ')}`);
+  return { jobs: result, bySite };
 }
 
 async function main() {
-  const result = await searchJobList({ keyword: '前端开发', city: '北京', page: 1, salary: '10-15万', workYear: '1-3年' });
-  // const result = await crawlJobDetail('https://m.zhipin.com/job_detail/7d5caa6504e27b8b1HF839S1FVtU.html');
-  // console.log(result);
+  const { jobs, bySite } = await searchJobList({ keyword: '前端开发', city: '北京', page: 1, salary: '10-15万', workYear: '1-3年' });
+  logWithTime('bySite', bySite);
+  logWithTime('jobs count', jobs.length);
 }
 
 export async function crawlJobDetail(url: string) {

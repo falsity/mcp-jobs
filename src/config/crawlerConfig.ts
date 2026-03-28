@@ -89,49 +89,66 @@ export const crawlerConfigs: SiteConfig[] = [
       }
     },
     rules: {
+      // Liepin may use .job-card-pc-container (new) or li.sojob-item (legacy). Inner selectors try both.
       jobInfo: {
-        selector: '.job-card-pc-container',
+        selector: '.job-card-pc-container, li.sojob-item',
         type: 'html',
-        handler: async (currentData, value, element) => {
-          try {
-            // console.log('element，当前元素内容：');
-            // 使用 $eval 获取子元素内容
-            const title = await element.$eval('.job-title-box > .ellipsis-1', el => el.textContent?.trim() || '');
-            const salary = await element.$eval('.job-salary', el => el.textContent?.trim() || '');
-            const company = await element.$eval('.company-name', el => el.textContent?.trim() || '');
-            const address = await element.$eval('.job-dq-box', el => el.textContent?.trim() || '');
-            // 使用 $$eval 获取多个子元素
-            let tags = await element.$$eval('.job-labels-box span', elements => 
-              elements.map(el => el.textContent?.trim() || '')
-            );
-
-            const companyTags = await element.$$eval('.company-tags-box span', elements => 
-              elements.map(el => el.textContent?.trim() || '')
-            );
-
-            tags = [...tags, ...companyTags];
-
-            // 职位详情
-            const jobDetail = await element.$eval('a', el => el.getAttribute('href') || '');
-
-            // console.log('Extracted job info:', { title, salary, company, address, tags, jobDetail });
-
-            return {
-              title,
-              salary,
-              company,
-              address,
-              tags,
-              jobDetail
-            };
-          } catch (error) {
-            console.error('Error extracting job info:', error);
-            // 如果出错，尝试使用另一种方式获取
-            const content = await element.textContent();
-            // console.log('Raw element content:', content);
-            return { content };
-          }
-        }
+        handler: (() => {
+          let _logOnce = false;
+          /** Try selectors in order, return first non-empty text. */
+          const evalText = async (el: ElementHandle<Element>, ...sels: string[]): Promise<string> => {
+            for (const s of sels) {
+              try {
+                const t = await el.$eval(s, (e: Element) => (e as HTMLElement).textContent?.trim() || '');
+                if (t) return t;
+              } catch { /* selector not found */ }
+            }
+            return '';
+          };
+          const evalHref = async (el: ElementHandle<Element>, ...sels: string[]): Promise<string> => {
+            for (const s of sels) {
+              try {
+                const h = await el.$eval(s, (e: Element) => (e as HTMLAnchorElement).getAttribute('href') || '');
+                if (h) return h.startsWith('http') ? h : `https://www.liepin.com${h}`;
+              } catch { /* selector not found */ }
+            }
+            return '';
+          };
+          return async (_currentData: Record<string, any>, _value: any, element: ElementHandle<Element>) => {
+            try {
+              const title = await evalText(
+                element,
+                '.job-title-box > .ellipsis-1',
+                '.job-title-box',
+                '.job-info h3 a',
+                'h3 a',
+                'a[href*="/job/"]'
+              );
+              const salary = await evalText(element, '.job-salary', 'span.text-warning', '[class*="salary"]');
+              const company = await evalText(element, '.company-name', '.job-info .company-name', '.comp-info a', 'p.company-name a');
+              const address = await evalText(element, '.job-dq-box', 'span.area', '.job-attributes .area', '[class*="dq"]');
+              let tags: string[] = [];
+              try {
+                const a = await element.$$eval('.job-labels-box span', (els: Element[]) => els.map((e) => (e as HTMLElement).textContent?.trim() || '').filter(Boolean));
+                const b = await element.$$eval('.company-tags-box span', (els: Element[]) => els.map((e) => (e as HTMLElement).textContent?.trim() || '').filter(Boolean));
+                tags = [...a, ...b];
+              } catch {
+                try {
+                  tags = await element.$$eval('.job-attributes span', (els: Element[]) => els.map((e) => (e as HTMLElement).textContent?.trim() || '').filter(Boolean));
+                } catch { /* ignore */ }
+              }
+              const jobDetail = await evalHref(element, 'a[href*="/job/"]', '.job-info h3 a', 'h3 a', 'a');
+              if (!title && !company && !salary) return null;
+              return { title, salary, company, address, tags, jobDetail };
+            } catch (error) {
+              if (!_logOnce) {
+                _logOnce = true;
+                console.error('[liepin jobInfo] Selectors may be outdated, skipping failed cards. Error:', (error as Error)?.message || error);
+              }
+              return null;
+            }
+          };
+        })(),
       },
       // hotJobs: {
       //   selector: '.hot-job-list',
@@ -193,6 +210,154 @@ export const crawlerConfigs: SiteConfig[] = [
     maxRequestsPerCrawl: 1,
     maxConcurrency: 1,
     timeout: 30000
+  },
+  // Lagou (拉勾) https://www.lagou.com/jobs/list_关键词?city=城市&page=
+  {
+    url: 'https://www.lagou.com/jobs',
+    name: 'lagou',
+    urlPattern: '^https://www\\.lagou\\.com/jobs/.*',
+    urlBuilder: (_, params) =>
+      `https://www.lagou.com/jobs/list_${encodeURIComponent((params.keyword as string) || '')}?city=${encodeURIComponent((params.city as string) || '全国')}&page=${params.page || 1}`,
+    rules: {
+      jobInfo: {
+        selector: 'li.con_list_item, ul.item_con_list > li, [class*="con_list_item"], .job-card, .position-list li, .job_list .con_list_item',
+        type: 'html',
+        handler: (() => {
+          const evalT = async (el: ElementHandle<Element>, ...s: string[]): Promise<string> => {
+            for (const x of s) {
+              try {
+                const t = await el.$eval(x, (e: Element) => (e as HTMLElement).textContent?.trim() || '');
+                if (t) return t;
+              } catch { }
+            }
+            return '';
+          };
+          const evalH = async (el: ElementHandle<Element>, ...s: string[]): Promise<string> => {
+            for (const x of s) {
+              try {
+                const h = await el.$eval(x, (e: Element) => (e as HTMLAnchorElement).getAttribute('href') || '');
+                if (h) return h.startsWith('http') ? h : 'https://www.lagou.com' + (h.startsWith('/') ? h : '/' + h);
+              } catch { }
+            }
+            return '';
+          };
+          return async (_: any, __: any, el: ElementHandle<Element>) => {
+            try {
+              const title = await evalT(el, '.list_item_job_title a', '.list_item_job_title', 'a[href*="/jobs/"]');
+              const salary = await evalT(el, '.list_item_salary', '[class*="salary"]');
+              const company = await evalT(el, '.company_name a', '.company_name', '[class*="company"]');
+              const address = await evalT(el, '.item_condition', '.list_item_bottom', '[class*="condition"]');
+              const jobDetail = await evalH(el, 'a[href*="/jobs/"]', '.list_item_job_title a', 'a');
+              if (!title && !company && !salary) return null;
+              return { title, salary, company, address, tags: address ? [address] : [], jobDetail };
+            } catch { return null; }
+          };
+        })(),
+      },
+    },
+    timeout: 30000,
+  },
+  // Zhaopin (智联) https://sou.zhaopin.com/?jl=cityId&kw=keyword&kt=3&p=page
+  {
+    url: 'https://sou.zhaopin.com',
+    name: 'zhaopin',
+    urlPattern: '^https://sou\\.zhaopin\\.com.*',
+    urlBuilder: (_, params) => {
+      const jl: Record<string, string> = { '北京': '530', '上海': '538', '深圳': '765', '广州': '801', '杭州': '653', '南京': '635', '成都': '639', '武汉': '736', '西安': '854' };
+      const jlVal = (params.city && jl[params.city as string]) || '0';
+      return `https://sou.zhaopin.com/?jl=${jlVal}&kw=${encodeURIComponent((params.keyword as string) || '')}&kt=3&p=${params.page || 1}`;
+    },
+    rules: {
+      jobInfo: {
+        selector: 'div.joblist-box__item, div[class*="joblist-box__item"], .positionlist .job-item, [class*="positionlist"] div[class*="item"]',
+        type: 'html',
+        handler: (() => {
+          const evalT = async (el: ElementHandle<Element>, ...s: string[]): Promise<string> => {
+            for (const x of s) {
+              try {
+                const t = await el.$eval(x, (e: Element) => (e as HTMLElement).textContent?.trim() || '');
+                if (t) return t;
+              } catch { }
+            }
+            return '';
+          };
+          const evalH = async (el: ElementHandle<Element>, ...s: string[]): Promise<string> => {
+            for (const x of s) {
+              try {
+                const h = await el.$eval(x, (e: Element) => (e as HTMLAnchorElement).getAttribute('href') || '');
+                if (h) return h.startsWith('http') ? h : 'https://www.zhaopin.com' + (h.startsWith('/') ? h : '/' + h);
+              } catch { }
+            }
+            return '';
+          };
+          return async (_: any, __: any, el: ElementHandle<Element>) => {
+            try {
+              const title = await evalT(el, '.jobinfo__name', 'a.jobinfo__name', '[class*="jobinfo__name"]');
+              const salary = await evalT(el, '.jobinfo__salary', '[class*="jobinfo__salary"]', '[class*="salary"]');
+              const company = await evalT(el, '.company__name', '[class*="company__name"]', '.jobinfo__company a', '[class*="company"]');
+              const address = await evalT(el, '.jobinfo__other-info-item', '[class*="address"]', '[class*="work-address"]');
+              let tags: string[] = [];
+              try {
+                tags = await el.$$eval('.jobinfo__other-info-item', (nodes: Element[]) => nodes.map((e) => (e as HTMLElement).textContent?.trim() || '').filter(Boolean));
+              } catch { }
+              const jobDetail = await evalH(el, 'a.jobinfo__name', '.jobinfo__name', 'a[href*="zhaopin.com"]', 'a');
+              if (!title && !company && !salary) return null;
+              return { title, salary, company, address, tags, jobDetail };
+            } catch { return null; }
+          };
+        })(),
+      },
+    },
+    timeout: 30000,
+  },
+  // 51job (前程无忧) https://search.51job.com/list/cityCode,000000,0000,00,9,99,keyword,2,page.html
+  {
+    url: 'https://search.51job.com',
+    name: '51job',
+    urlPattern: '^https://search\\.51job\\.com/list/.*',
+    urlBuilder: (_, params) => {
+      const codes: Record<string, string> = { '北京': '010000', '上海': '020000', '深圳': '040000', '广州': '030200', '杭州': '080200', '南京': '070200', '成都': '090200', '武汉': '180200', '西安': '200200' };
+      const code = (params.city && codes[params.city as string]) || '000000';
+      return `https://search.51job.com/list/${code},000000,0000,00,9,99,${encodeURIComponent((params.keyword as string) || '')},2,${params.page || 1}.html`;
+    },
+    rules: {
+      jobInfo: {
+        selector: 'div#resultList div.el, div.j_joblist div.e, div.dw_table div.el, div.el',
+        type: 'html',
+        handler: (() => {
+          const evalT = async (el: ElementHandle<Element>, ...s: string[]): Promise<string> => {
+            for (const x of s) {
+              try {
+                const t = await el.$eval(x, (e: Element) => (e as HTMLElement).textContent?.trim() || '');
+                if (t) return t;
+              } catch { }
+            }
+            return '';
+          };
+          const evalH = async (el: ElementHandle<Element>, ...s: string[]): Promise<string> => {
+            for (const x of s) {
+              try {
+                const h = await el.$eval(x, (e: Element) => (e as HTMLAnchorElement).getAttribute('href') || '');
+                if (h) return h.startsWith('http') ? h : 'https://www.51job.com' + (h.startsWith('/') ? h : '/' + h);
+              } catch { }
+            }
+            return '';
+          };
+          return async (_: any, __: any, el: ElementHandle<Element>) => {
+            try {
+              const title = await evalT(el, '.jname', '.t1 .jname', 'a.jname', '[class*="jname"]');
+              const salary = await evalT(el, '.sal', 'span.sal', '[class*="sal"]');
+              const company = await evalT(el, '.cname', '.t2 .cname', '[class*="cname"]');
+              const address = await evalT(el, 'span.d', '.t3', '.area', '[class*="workarea"]');
+              const jobDetail = await evalH(el, '.jname', 'a.jname', '.t1 a', 'a[href*="51job.com"]', 'a');
+              if (!title && !company && !salary) return null;
+              return { title, salary, company, address, tags: [], jobDetail };
+            } catch { return null; }
+          };
+        })(),
+      },
+    },
+    timeout: 30000,
   },
   {
     url: 'https://m.zhipin.com/c100010000',

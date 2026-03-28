@@ -259,6 +259,135 @@ mcp:
 
 大模型会自动调用 mcp-jobs 服务获取相关信息并为您展示结果。
 
+## 远程 MCP 服务
+
+如需让**远端客户端**通过网络调用本机的 mcp-jobs（例如本机跑服务、其他机器上的 Cursor/Agent 连接），可启动远程服务。支持两种传输方式：
+
+### 方式一：HTTP 传输（推荐，兼容 MultiServerMCPClient）
+
+**启动服务：**
+
+```bash
+# 默认 http://0.0.0.0:6000
+npx -y mcp-jobs-server-http
+
+# 自定义端口与监听地址
+MCP_JOBS_PORT=6000 MCP_JOBS_HOST=0.0.0.0 npx -y mcp-jobs-server-http
+```
+
+或安装后：
+
+```bash
+pnpm run server:http
+# 或
+npx mcp-jobs-server-http
+```
+
+**端点说明：**
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | `/mcp` | 发送 JSON-RPC 2.0 消息（主要端点） |
+| GET | `/mcp` | SSE 流（可选，用于服务器通知） |
+| DELETE | `/mcp` | 关闭会话 |
+| GET | `/`, `/health` | 健康检查 |
+
+**客户端连接（MultiServerMCPClient）：**
+
+```python
+from langchain_mcp_adapters.client import MultiServerMCPClient
+
+client = MultiServerMCPClient({
+    "mcp_jobs": {
+        "transport": "http",
+        "url": "http://localhost:6000/mcp"
+    }
+})
+```
+
+**连接 URL**：`http://<服务器IP或域名>:<端口>/mcp`，例如 `http://192.168.1.100:6000/mcp`
+
+---
+
+### 方式二：SSE 传输（传统方式）
+
+**启动服务：**
+
+```bash
+# 默认 http://0.0.0.0:6000
+npx -y mcp-jobs-server
+
+# 自定义端口与监听地址
+MCP_JOBS_PORT=6000 MCP_JOBS_HOST=0.0.0.0 npx -y mcp-jobs-server
+```
+
+或安装后：
+
+```bash
+pnpm run server
+# 或
+npx mcp-jobs-server
+```
+
+**端点说明：**
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/sse` | 建立 SSE 连接，服务端返回 `event: endpoint` 及 `sessionId` |
+| POST | `/messages?sessionId=<id>` | 发送 JSON-RPC 2.0 消息，`sessionId` 来自 GET /sse |
+| GET | `/`, `/health` | 健康检查 |
+
+**客户端连接：**
+
+- **连接 URL**：`http://<服务器IP或域名>:<端口>/sse`，例如 `http://192.168.1.100:6000/sse`
+- 使用支持 **MCP over SSE** 的客户端
+
+---
+
+### 环境变量
+
+| 变量 | 默认 | 说明 |
+|------|------|------|
+| `MCP_JOBS_PORT` | `6000` | HTTP 服务端口 |
+| `MCP_JOBS_HOST` | `0.0.0.0` | 监听地址，`0.0.0.0` 表示允许外网访问 |
+
+### 常见问题
+
+**端口被占用错误：**
+
+如果遇到 `EADDRINUSE: address already in use` 错误，说明端口已被占用。解决方案：
+
+1. **停止占用端口的进程：**
+   ```bash
+   # 查找占用端口的进程
+   lsof -ti:6000 | xargs kill -9
+   
+   # 或使用提供的脚本
+   ./scripts/stop-servers.sh
+   ```
+
+2. **使用其他端口：**
+   ```bash
+   MCP_JOBS_PORT=6001 npx -y mcp-jobs-server-http
+   ```
+
+3. **检查是否有其他服务器在运行：**
+   ```bash
+   ps aux | grep mcp-http
+   ```
+
+> 若本机有防火墙，请放行 `MCP_JOBS_PORT`；生产环境建议配合反向代理与 HTTPS。
+
+## 供 LangGraph / 其他 Agent 集成
+
+若要在 **LangGraph** 或自建 Agent 中调用 mcp-jobs 的 `mcp_search_job`、`mcp_job_detail`：
+
+1. 安装：`pip install langchain-mcp-adapters langgraph langchain-core`
+2. 用 **stdio** 启动 mcp-jobs：`npx -y mcp-jobs` 或 `node /path/to/mcp-jobs/dist/mcp.js`
+3. 在 **同一 `async with client.session("mcp_jobs")` 块内** 完成 `load_mcp_tools(session)` 与 `agent.ainvoke`，否则 stdio 进程会提前退出。
+
+详细代码与两种接入方式（`create_react_agent` / 自建图）见：[**LANGGRAPH_INTEGRATION.md**](LANGGRAPH_INTEGRATION.md)。同仓库下的 [langgraph-mcp-jobs](../langgraph-mcp-jobs) 为可运行示例。
+
 ## 🔧 调试和开发
 
 ### 🐛 调试模式
@@ -295,6 +424,46 @@ CRAWLER_USER_AGENT="Custom Bot 1.0" npx -y mcp-jobs
 1. **站点特定配置** - 在 `crawlerConfig.ts` 中为特定网站设置的 `browserConfig`
 2. **环境变量** - 通过 `CRAWLER_*` 环境变量设置
 3. **默认配置** - 系统默认值
+
+### 🧪 如何测试 mcp-jobs 是否正常
+
+**方式一：命令（Node）**
+
+在 mcp-jobs 目录下执行（会启动子进程做 MCP 握手并列出工具，不依赖已运行的服务）：
+
+```bash
+# 只检查 initialize / tools/list
+pnpm run test:mcp
+# 或
+node examples/test-mcp-cli.mjs
+
+# 顺带调用一次 mcp_search_job
+pnpm run test:mcp:search
+# 或
+node examples/test-mcp-cli.mjs --call-search
+```
+
+**方式二：Python（仅标准库，无需 pip 安装）**
+
+在 mcp-jobs 目录下执行（需 Node 在 PATH 中）：
+
+```bash
+# 只检查 initialize / tools/list
+python3 examples/test_mcp.py
+
+# 顺带调用一次 mcp_search_job
+python3 examples/test_mcp.py --call-search
+```
+
+**方式三：MCP Inspector（图形界面）**
+
+```bash
+npx @modelcontextprotocol/inspector npx -y mcp-jobs
+```
+
+在浏览器中打开提示的地址，可查看工具列表并手动调用 `mcp_search_job`、`mcp_job_detail`。
+
+> 注意：上述测试会自行启动 mcp-jobs 子进程。若在 Cursor 等客户端里已配置 mcp-jobs，请勿同时在终端运行 `npx -y mcp-jobs`，否则会占用 stdio。
 
 ## 🌟 为什么选择 MCP Jobs？
 

@@ -1,11 +1,19 @@
 import fs from 'fs';
 import path from 'path';
 
+// Log with ISO timestamp (for all console output in this service)
+function logWithTime(level: 'log' | 'error', msg: string, ...args: unknown[]): void {
+  const ts = new Date().toISOString();
+  const out = level === 'log' ? console.log : console.error;
+  out(`[${ts}] ${msg}`, ...args);
+}
+
 export class StorageService {
   private dataDir: string;
 
   constructor() {
-    this.dataDir = path.join(require('os').tmpdir(), 'data');
+    // Save data under mcp-jobs/data (cwd is mcp-jobs when run via npx from project root)
+    this.dataDir = path.join(process.cwd(), 'data');
     this.ensureDataDirectory();
   }
 
@@ -17,7 +25,7 @@ export class StorageService {
 
   async saveData(siteName: string, data: any): Promise<void> {
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const fileName = `${siteName}_${timestamp}.json`;
+    const fileName = `${timestamp}_${siteName}.json`;
     const filePath = path.join(this.dataDir, fileName);
 
     try {
@@ -26,9 +34,9 @@ export class StorageService {
         JSON.stringify(data, null, 2),
         'utf-8'
       );
-      console.log(`Data saved to ${filePath}`);
+      logWithTime('log', `Data saved to ${filePath}`);
     } catch (error) {
-      console.error(`Error saving data to ${filePath}:`, error);
+      logWithTime('error', `Error saving data to ${filePath}:`, error);
       throw error;
     }
   }
@@ -36,13 +44,14 @@ export class StorageService {
   async loadLatestData(siteName: string): Promise<any | null> {
     try {
       const files = await fs.promises.readdir(this.dataDir);
-      const siteFiles = files.filter(file => file.startsWith(siteName));
+      const suffix = `_${siteName}.json`;
+      const siteFiles = files.filter(file => file.endsWith(suffix));
       
       if (siteFiles.length === 0) {
         return null;
       }
 
-      // 按文件名排序，获取最新的文件
+      // Sort by filename (timestamp first), latest first
       siteFiles.sort().reverse();
       const latestFile = siteFiles[0];
       const filePath = path.join(this.dataDir, latestFile);
@@ -50,7 +59,7 @@ export class StorageService {
       const data = await fs.promises.readFile(filePath, 'utf-8');
       return JSON.parse(data);
     } catch (error) {
-      console.error(`Error loading data for ${siteName}:`, error);
+      logWithTime('error', `Error loading data for ${siteName}:`, error);
       return null;
     }
   }
