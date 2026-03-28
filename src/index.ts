@@ -66,25 +66,33 @@ async function crawlByUrl(url: string, params: SearchParams): Promise<CrawlerDat
 export interface SearchJobResult {
   jobs: any[];
   bySite: { name: string; count: number }[];
+  /** Per-site crawl hints (e.g. zhipin fetchMeta when BOSS blocks headless). */
+  siteDiagnostics?: Record<string, { fetchMeta?: unknown }>;
 }
 
 export async function searchJobList(params: SearchParams = {}): Promise<SearchJobResult> {
   const { keyword, city, page = 1, salary, workYear } = params;
   const result: any[] = [];
   const bySite: { name: string; count: number }[] = [];
+  let siteDiagnostics: Record<string, { fetchMeta?: unknown }> | undefined;
 
   logWithTime(`开始搜索职位 - 关键词: ${keyword}, 城市: ${city || '全国'}`);
 
   for (const config of jobSearchUrls) {
     try {
       const dataset = await crawlByUrl(config.url, {
-        keyword: keyword + ' ' + city,
+        keyword: keyword ?? '',
         city,
         page,
         salary,
         workYear
       });
       if (dataset) {
+        const fm = dataset[0]?.data?.fetchMeta;
+        if (fm) {
+          if (!siteDiagnostics) siteDiagnostics = {};
+          siteDiagnostics[config.name] = { fetchMeta: fm };
+        }
         const jobItems = dataset.filter(item => item.data?.jobInfo);
         let added = 0;
         jobItems.forEach(item => {
@@ -105,7 +113,7 @@ export async function searchJobList(params: SearchParams = {}): Promise<SearchJo
   }
 
   logWithTime(`搜索完成，共 ${result.length} 个职位，各站点: ${bySite.map(s => s.name + '=' + s.count).join(', ')}`);
-  return { jobs: result, bySite };
+  return { jobs: result, bySite, siteDiagnostics };
 }
 
 async function main() {

@@ -109,9 +109,25 @@ export function createServer(): Server {
           const page = args.page !== undefined ? (typeof args.page === 'string' ? Number(args.page) : args.page) : undefined;
           safeSendLoggingMessage(server, 'info', `开始搜索职位，关键词: ${keyword}, 城市: ${city || '全国'}, 页码: ${page ?? 1}`);
           try {
-            const { jobs: results, bySite } = await searchJobList({ keyword, city, page, salary, workYear });
+            const { jobs: results, bySite, siteDiagnostics } = await searchJobList({ keyword, city, page, salary, workYear });
             safeSendLoggingMessage(server, 'info', `搜索完成，找到 ${results.length} 个职位，各站点: ${bySite.map(s => s.name + '=' + s.count).join(', ')}`);
-            return { content: [{ type: 'text', text: JSON.stringify({ jobs: results, metadata: { totalResults: results.length, searchParams: { keyword, city, page, salary, workYear }, bySite } }) }], isError: false };
+            return {
+              content: [
+                {
+                  type: 'text',
+                  text: JSON.stringify({
+                    jobs: results,
+                    metadata: {
+                      totalResults: results.length,
+                      searchParams: { keyword, city, page, salary, workYear },
+                      bySite,
+                      ...(siteDiagnostics && Object.keys(siteDiagnostics).length > 0 ? { siteDiagnostics } : {}),
+                    },
+                  }),
+                },
+              ],
+              isError: false,
+            };
           } catch (error) {
             safeSendLoggingMessage(server, 'error', `搜索失败: ${error instanceof Error ? error.message : String(error)}`);
             return { content: [{ type: 'text', text: JSON.stringify({ jobs: [], metadata: { totalResults: 0, searchParams: { keyword, city, page, salary, workYear }, bySite: [], error: '搜索服务暂时不可用，请稍后重试' } }) }], isError: false };

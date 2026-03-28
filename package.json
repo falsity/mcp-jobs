@@ -15,7 +15,8 @@
     "server": "node dist/mcp-http.js",
     "server:dev": "ts-node src/mcp-http.ts",
     "server:http": "node dist/mcp-http-simple.js",
-    "server:http:dev": "ts-node src/mcp-http-simple.ts"
+    "server:http:dev": "ts-node src/mcp-http-simple.ts",
+    "verify:search": "node scripts/export-search-result.cjs"
   },
   "keywords": ["jobs", "crawler", "search", "mcp", "model-context-protocol"],
   "author": "",

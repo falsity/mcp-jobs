@@ -35,9 +35,9 @@ export class CrawlerConfigService {
         height: this.parseNumber(process.env.CRAWLER_VIEWPORT_HEIGHT, 800),
       },
       
-      // 从环境变量读取用户代理配置
-      userAgent: process.env.CRAWLER_USER_AGENT || 
-        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/94.0.4606.81 Safari/537.36',
+      // 从环境变量读取用户代理配置（默认使用较新 Chrome，降低站点拦截概率）
+      userAgent: process.env.CRAWLER_USER_AGENT ||
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
       
       // 从环境变量读取调试模式配置
       debug: this.parseBoolean(process.env.CRAWLER_DEBUG, false),
@@ -67,12 +67,14 @@ export class CrawlerConfigService {
    */
   public getBrowserConfig(siteConfig?: BrowserConfig): BrowserConfig {
     const globalConfig = this.getGlobalConfig();
-    
+
     return {
       headless: siteConfig?.headless ?? globalConfig.headless,
       timeout: siteConfig?.timeout ?? globalConfig.timeout,
       viewport: siteConfig?.viewport ?? globalConfig.viewport,
       userAgent: siteConfig?.userAgent ?? globalConfig.userAgent,
+      locale: siteConfig?.locale,
+      timezoneId: siteConfig?.timezoneId,
     };
   }
 
@@ -102,7 +104,8 @@ export class CrawlerConfigService {
         '--disable-accelerated-2d-canvas',
         '--no-first-run',
         '--no-zygote',
-        '--disable-gpu'
+        '--disable-gpu',
+        '--disable-blink-features=AutomationControlled',
       ]
     };
   }
@@ -113,13 +116,27 @@ export class CrawlerConfigService {
   public getBrowserContextOptions(siteConfig?: BrowserConfig): {
     viewport: { width: number; height: number };
     userAgent: string;
+    locale?: string;
+    timezoneId?: string;
+    storageState?: string;
   } {
     const browserConfig = this.getBrowserConfig(siteConfig);
-    
-    return {
+
+    const out: {
+      viewport: { width: number; height: number };
+      userAgent: string;
+      locale?: string;
+      timezoneId?: string;
+      storageState?: string;
+    } = {
       viewport: browserConfig.viewport!,
       userAgent: browserConfig.userAgent!,
     };
+    if (browserConfig.locale) out.locale = browserConfig.locale;
+    if (browserConfig.timezoneId) out.timezoneId = browserConfig.timezoneId;
+    const storagePath = process.env.CRAWLER_STORAGE_STATE?.trim();
+    if (storagePath) out.storageState = storagePath;
+    return out;
   }
 
   /**

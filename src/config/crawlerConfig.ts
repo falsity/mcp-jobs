@@ -15,6 +15,10 @@ export interface BrowserConfig {
     height: number;
   };
   userAgent?: string;    // 用户代理
+  /** Playwright context locale, e.g. zh-CN */
+  locale?: string;
+  /** IANA timezone, e.g. Asia/Shanghai */
+  timezoneId?: string;
 }
 
 export interface SiteConfig {
@@ -116,17 +120,43 @@ export const crawlerConfigs: SiteConfig[] = [
           };
           return async (_currentData: Record<string, any>, _value: any, element: ElementHandle<Element>) => {
             try {
+              // New PC list (2024+): hashed CSS modules; use stable data-nick hooks.
               const title = await evalText(
                 element,
+                'a[data-nick="job-detail-job-info"] .ellipsis-1',
                 '.job-title-box > .ellipsis-1',
                 '.job-title-box',
                 '.job-info h3 a',
                 'h3 a',
-                'a[href*="/job/"]'
+                'a[href*="/job/"]',
+                'a[href*="/a/"]'
               );
-              const salary = await evalText(element, '.job-salary', 'span.text-warning', '[class*="salary"]');
-              const company = await evalText(element, '.company-name', '.job-info .company-name', '.comp-info a', 'p.company-name a');
-              const address = await evalText(element, '.job-dq-box', 'span.area', '.job-attributes .area', '[class*="dq"]');
+              // Salary: sibling span under job title row (FOFCC row: title block + salary span)
+              const salary = await evalText(
+                element,
+                'a[data-nick="job-detail-job-info"] > div:first-child > span',
+                'a[data-nick="job-detail-job-info"] div[class*="FOFCC"] > span',
+                '.job-salary',
+                'span.text-warning',
+                '[class*="salary"]'
+              );
+              const company = await evalText(
+                element,
+                '[data-nick="job-detail-company-info"] .ellipsis-1',
+                '[data-nick="job-detail-company-info"] span.ellipsis-1',
+                '.company-name',
+                '.job-info .company-name',
+                '.comp-info a',
+                'p.company-name a'
+              );
+              const address = await evalText(
+                element,
+                'a[data-nick="job-detail-job-info"] [class*="__9nJ"] .ellipsis-1',
+                '.job-dq-box',
+                'span.area',
+                '.job-attributes .area',
+                '[class*="dq"]'
+              );
               let tags: string[] = [];
               try {
                 const a = await element.$$eval('.job-labels-box span', (els: Element[]) => els.map((e) => (e as HTMLElement).textContent?.trim() || '').filter(Boolean));
@@ -137,9 +167,26 @@ export const crawlerConfigs: SiteConfig[] = [
                   tags = await element.$$eval('.job-attributes span', (els: Element[]) => els.map((e) => (e as HTMLElement).textContent?.trim() || '').filter(Boolean));
                 } catch { /* ignore */ }
               }
-              const jobDetail = await evalHref(element, 'a[href*="/job/"]', '.job-info h3 a', 'h3 a', 'a');
-              if (!title && !company && !salary) return null;
-              return { title, salary, company, address, tags, jobDetail };
+              const jobDetail = await evalHref(
+                element,
+                'a[data-nick="job-detail-job-info"]',
+                'a[href*="/job/"]',
+                'a[href*="/a/"]',
+                '.job-info h3 a',
+                'h3 a',
+                'a'
+              );
+              // Title: first .ellipsis-1 is job name; second in card is often district — keep longest as title if duplicate
+              let titleFixed = title;
+              const ell = await element.$$('a[data-nick="job-detail-job-info"] .ellipsis-1');
+              if (ell.length >= 1) {
+                try {
+                  const t0 = await ell[0].evaluate((e) => (e as HTMLElement).textContent?.trim() || '');
+                  if (t0) titleFixed = t0;
+                } catch { /* ignore */ }
+              }
+              if (!titleFixed && !company && !salary) return null;
+              return { title: titleFixed, salary, company, address, tags, jobDetail };
             } catch (error) {
               if (!_logOnce) {
                 _logOnce = true;
@@ -272,6 +319,36 @@ export const crawlerConfigs: SiteConfig[] = [
         selector: 'div.joblist-box__item, div[class*="joblist-box__item"], .positionlist .job-item, [class*="positionlist"] div[class*="item"]',
         type: 'html',
         handler: (() => {
+          /** List card often merges company row with scale/funding/HR CTA; keep company name only. */
+          const zhaopinFirstLine = (text: string): string => {
+            if (!text) return '';
+            const lines = text
+              .split(/\r?\n/)
+              .map((l) => l.trim())
+              .filter((l) => l.length > 0);
+            let line = lines.length > 0 ? lines[0] : text.trim();
+            const junk = line.search(/立即沟通|下载智联|对职位感兴趣吗|回复可能性|分钟内回复/);
+            if (junk > 0) line = line.slice(0, junk).trim();
+            // Same physical line: "公司名    股份制企业" or "公司 A轮"
+            const meta = line.search(
+              /\s{2,}|(?:^|\s)(股份制|民营|国企|合资|外资|上市公司|最佳雇主|未融资|天使轮|[ABCD]轮|已上市|20-\d+人|\d+-\d+人|10000人以上)/
+            );
+            if (meta > 1) line = line.slice(0, meta).trim();
+            return line;
+          };
+          const zhaopinCleanTags = (tags: string[], address: string): string[] => {
+            const seen = new Set<string>();
+            const out: string[] = [];
+            for (const t of tags) {
+              const x = zhaopinFirstLine(t || '');
+              if (!x || x === address) continue;
+              if (/立即沟通|下载智联|对职位感兴趣|最佳雇主/.test(x)) continue;
+              if (seen.has(x)) continue;
+              seen.add(x);
+              out.push(x);
+            }
+            return out;
+          };
           const evalT = async (el: ElementHandle<Element>, ...s: string[]): Promise<string> => {
             for (const x of s) {
               try {
@@ -294,15 +371,42 @@ export const crawlerConfigs: SiteConfig[] = [
             try {
               const title = await evalT(el, '.jobinfo__name', 'a.jobinfo__name', '[class*="jobinfo__name"]');
               const salary = await evalT(el, '.jobinfo__salary', '[class*="jobinfo__salary"]', '[class*="salary"]');
-              const company = await evalT(el, '.company__name', '[class*="company__name"]', '.jobinfo__company a', '[class*="company"]');
-              const address = await evalT(el, '.jobinfo__other-info-item', '[class*="address"]', '[class*="work-address"]');
+              const companyRaw = await evalT(
+                el,
+                'a.company__name',
+                '.companyinfo a.company__name',
+                '.company__name',
+                '[class*="companyinfo"] [class*="company__name"]',
+                '.jobinfo__company a',
+                '[class*="company__name"]',
+                '.jobinfo__company',
+                '[class*="companyinfo"]',
+                '[class*="company"]'
+              );
+              const company = zhaopinFirstLine(companyRaw);
+              const address = await evalT(
+                el,
+                '.jobinfo__other-info-item:first-child',
+                '.jobinfo__other-info-item',
+                '[class*="work-address"]'
+              );
               let tags: string[] = [];
               try {
-                tags = await el.$$eval('.jobinfo__other-info-item', (nodes: Element[]) => nodes.map((e) => (e as HTMLElement).textContent?.trim() || '').filter(Boolean));
+                tags = await el.$$eval('.jobinfo__other-info-item', (nodes: Element[]) =>
+                  nodes.map((e) => (e as HTMLElement).textContent?.trim() || '').filter(Boolean)
+                );
               } catch { }
               const jobDetail = await evalH(el, 'a.jobinfo__name', '.jobinfo__name', 'a[href*="zhaopin.com"]', 'a');
               if (!title && !company && !salary) return null;
-              return { title, salary, company, address, tags, jobDetail };
+              const addressClean = zhaopinFirstLine(address);
+              return {
+                title: zhaopinFirstLine(title),
+                salary: zhaopinFirstLine(salary),
+                company,
+                address: addressClean,
+                tags: zhaopinCleanTags(tags, addressClean),
+                jobDetail,
+              };
             } catch { return null; }
           };
         })(),
@@ -362,11 +466,32 @@ export const crawlerConfigs: SiteConfig[] = [
   {
     url: 'https://m.zhipin.com/c100010000',
     name: 'zhipin',
-    urlPattern: '^https://m\.zhipin\.com/c100010000/[^\.]+$',
-    urlBuilder: (url, params, paramsConfig) => {
+    // Match any Boss city segment (c + digits), not only c100010000 (全国).
+    urlPattern: '^https://m\\.zhipin\\.com/c\\d+',
+    // Boss mobile: path is /c{cityCode}/... — c100010000 is 全国; use per-city codes when city is set.
+    urlBuilder: (_url, params, paramsConfig) => {
+      const bossCityCode: Record<string, string> = {
+        北京: '101010100',
+        上海: '101020100',
+        广州: '101280100',
+        深圳: '101280600',
+        杭州: '101210100',
+        南京: '101190100',
+        成都: '101270100',
+        武汉: '101200100',
+        西安: '101110100',
+        苏州: '101190400',
+        天津: '101030100',
+        重庆: '101040100',
+      };
+      const city = String(params.city ?? '').trim();
+      const code = bossCityCode[city] || '100010000';
+      const base = `https://m.zhipin.com/c${code}`;
       const { salary, workYear, keyword, page } = params;
       const { salaryCode, workYearCode } = paramsConfig;
-      return url + `/${workYearCode.rule[workYear] || ''}?ka=${salaryCode.rule[salary] || ''}&page=${page}&query=${encodeURIComponent(keyword)}`;
+      const exp = workYearCode.rule[workYear] || '';
+      const ka = salaryCode.rule[salary] || '';
+      return `${base}/${exp}?ka=${ka}&page=${page}&query=${encodeURIComponent((keyword as string) || '')}`;
     },
     config: {
       salaryCode: {
@@ -399,6 +524,14 @@ export const crawlerConfigs: SiteConfig[] = [
           '10年以上': 'e_107'
         }
       }
+    },
+    // Mobile UA + viewport reduce m.zhipin.com security-check redirects vs desktop headless defaults.
+    browserConfig: {
+      viewport: { width: 390, height: 844 },
+      userAgent:
+        'Mozilla/5.0 (Linux; Android 13; SM-S908N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36',
+      locale: 'zh-CN',
+      timezoneId: 'Asia/Shanghai',
     },
     rules: {
       jobInfo: {

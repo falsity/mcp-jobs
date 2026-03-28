@@ -1,4 +1,5 @@
 data/
+verification-output.json
 node_modules/
 .env
 .env.local

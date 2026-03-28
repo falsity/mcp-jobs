@@ -1,7 +1,15 @@
 import { chromium, firefox, webkit, Browser, BrowserContext, Page, ElementHandle } from 'playwright';
 import { SiteConfig, CrawlerRule } from '../config/crawlerConfig';
-import { crawlerConfigs } from '../config/crawlerConfig';
 import { crawlerConfigService } from '../services/crawlerConfigService';
+
+/** Boss (zhipin) redirects headless/unauthenticated sessions to verify or login; list selectors will be empty. */
+function isBossAntiCrawlUrl(url: string): boolean {
+  return (
+    /m\.zhipin\.com\/web\/common\/security-check/i.test(url) ||
+    /m\.zhipin\.com\/web\/user\b/i.test(url) ||
+    /www\.zhipin\.com\/web\/passport\/.*\/verify/i.test(url)
+  );
+}
 
 export interface CrawlerData {
   url: string;
@@ -94,7 +102,10 @@ export class WebCrawler {
     try {
       this.log('Creating new page...');
       page = await this.context!.newPage();
-      
+      await page.addInitScript(() => {
+        Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+      });
+
       // Navigate to the URL with timeout
       const timeout = config.timeout || 30000;
       this.log(`Navigating to ${url} with timeout ${timeout}ms`);
@@ -107,11 +118,36 @@ export class WebCrawler {
       
       // 等待一小段时间确保动态内容加载
       await page.waitForTimeout(2000);
-      
+
+      const finalUrl = page.url();
+      if (isBossAntiCrawlUrl(finalUrl)) {
+        this.log('Boss anti-crawl or verify page detected, skipping DOM extract:', finalUrl);
+        const crawlerData: CrawlerData = {
+          url,
+          data: {
+            jobInfo: [],
+            fetchMeta: {
+              blocked: true,
+              reason:
+                'BOSS redirected to security-check / login / verify. Headless crawl cannot pass; use real browser session (cookies), non-headless, or accept empty zhipin results.',
+              finalUrl,
+            },
+          },
+          rawData: {},
+          timestamp: Date.now(),
+          params: params,
+          succeeded: true,
+        };
+        this.saveData(config.name, crawlerData);
+        return;
+      }
+
       this.log('Page loaded successfully');
-      
+
       this.log('Extracting data using rules:', config.rules);
-      const { rawData, processedData } = await this.extractData(page);
+      // Use the crawl config's rules, not page.url() lookup. Redirects (e.g. Boss zhipin -> security-check.html)
+      // change the URL and would otherwise fail urlPattern matching, yielding empty data {}.
+      const { rawData, processedData } = await this.extractData(page, config);
       this.log('Data extracted successfully:', { raw: rawData, processed: processedData });
       
       const crawlerData: CrawlerData = {
@@ -156,12 +192,10 @@ export class WebCrawler {
     this.log(`Current data count for ${siteName}: ${this.crawledData.get(siteName)?.length}`);
   }
 
-  private async extractData(page: Page): Promise<{ rawData: Record<string, any>, processedData: Record<string, any> }> {
+  private async extractData(page: Page, siteConfig: SiteConfig): Promise<{ rawData: Record<string, any>, processedData: Record<string, any> }> {
     const rawData: Record<string, any> = {};
     const processedData: Record<string, any> = {};
-    const rules = crawlerConfigs.find(config => {
-      return config.url === page.url() || (config.urlPattern && new RegExp(config.urlPattern).test(page.url()))
-    })?.rules;
+    const rules = siteConfig.rules;
 
     for (const [key, rule] of Object.entries(rules || [])) {
       this.log(`Extracting data for rule: ${key}`, rule);
@@ -216,7 +250,7 @@ export class WebCrawler {
       }
     }
 
-    return { rawData: {}, processedData };
+    return { rawData, processedData };
   }
 
   async crawl(config: SiteConfig & { params?: Record<string, string> }): Promise<void> {
